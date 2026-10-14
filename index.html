@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Домбра 3D</title>
+<style>
+:root{--bg:#ece9e4;--fg:#2b2622;--btn:#ffffff;--line:#cfc8bf;--on:#b0551f;color-scheme:light dark;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d1b19;--fg:#eee6dc;--btn:#2d2a27;--line:#4a443e}}
+:root[data-theme="dark"]{--bg:#1d1b19;--fg:#eee6dc;--btn:#2d2a27;--line:#4a443e}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+body{display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
+#hint{position:absolute;top:8px;left:0;right:0;text-align:center;font-size:13px;opacity:.65;pointer-events:none;padding:0 12px}
+#bar{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:10px 10px 12px}
+button{font:inherit;font-size:15px;min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--line);background:var(--btn);color:var(--fg)}
+button.on{background:var(--on);color:#fff;border-color:var(--on)}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas><div id="hint">Тяните пальцем — вращать · двумя пальцами — приблизить</div></div>
+<div id="bar">
+<button data-az="0">Спереди</button><button data-az="1.5708">Сбоку</button>
+<button data-az="3.1416">Сзади</button><button id="auto">⟳ Авто</button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const V=(x,y,z)=>new THREE.Vector3(x,y,z);
+const col=h=>new THREE.Color(h).convertSRGBToLinear();
+const B=0.54, NUT=1.03;            // длина корпуса, высота верхнего порожка
+function tex(w,h,draw){const c=document.createElement('canvas');c.width=w;c.height=h;draw(c.getContext('2d'),w,h);
+  const t=new THREE.CanvasTexture(c);t.encoding=THREE.sRGBEncoding;t.anisotropy=8;return t;}
+function grain(c,W,H,n,rgb,a){for(let i=0;i<n;i++){const x=Math.random()*W;
+  c.strokeStyle=`rgba(${rgb},${a*(0.4+Math.random())})`;c.lineWidth=.6+Math.random()*1.6;c.beginPath();
+  for(let y=0;y<=H;y+=40)c.lineTo(x+Math.sin(y*.01+i)*3,y);c.stroke();}}
+function curl(c,x,y,r,d){c.beginPath();for(let a=0;a<=11;a+=.25){const rr=r*(1-a/13),t=a*d;c.lineTo(x+rr*Math.cos(t),y+rr*Math.sin(t));}c.stroke();}
+
+/* ---------- текстуры ---------- */
+const topTex=tex(512,960,(c,W,H)=>{                       // дека
+  const g=c.createLinearGradient(0,0,W,0);g.addColorStop(0,'#d9a561');g.addColorStop(.5,'#e8b977');g.addColorStop(1,'#d9a561');
+  c.fillStyle=g;c.fillRect(0,0,W,H);grain(c,W,H,150,'120,65,20',.16);
+  c.fillStyle='#7f3b20';c.fillRect(0,0,W,.29*H);
+  [[60,.30],[140,.30],[372,.30],[452,.30]].forEach(p=>{c.beginPath();c.arc(p[0],p[1]*H,42,0,7);c.fill();});
+  [[222,.345],[290,.345],[256,.31],[256,.385]].forEach(p=>{c.beginPath();c.arc(p[0],p[1]*H,27,0,7);c.fill();});
+  c.beginPath();c.moveTo(256,.29*H);c.lineTo(310,.357*H);c.lineTo(256,.42*H);c.lineTo(202,.357*H);c.fill();
+  grain(c,W,.4*H,60,'40,10,5',.18);
+  c.fillStyle='#16100c';c.beginPath();c.arc(256,.357*H,13,0,7);c.fill();           // резонаторное отверстие
+  c.fillStyle='#111';c.beginPath();c.moveTo(212,0);c.lineTo(300,0);c.lineTo(302,64);c.lineTo(210,64);c.fill();
+  c.fillStyle='#efe6cf';c.beginPath();c.moveTo(246,0);c.lineTo(266,0);c.lineTo(256,60);c.fill();
+  c.fillStyle='#7f3b20';c.fillRect(0,.955*H,W,H);                                  // нижний орнамент
+  [[100,.95],[176,.93],[256,.912],[336,.93],[412,.95]].forEach(p=>{c.beginPath();c.arc(p[0],p[1]*H,40,0,7);c.fill();});
+});
+const backTex=tex(512,1024,(c,W,H)=>{                     // спинка с орнаментом
+  const g=c.createLinearGradient(0,0,W,0);
+  [[0,'#6e2a0e'],[.25,'#ad4f1a'],[.5,'#cc6b2b'],[.75,'#ad4f1a'],[1,'#6e2a0e']].forEach(s=>g.addColorStop(s[0],s[1]));
+  c.fillStyle=g;c.fillRect(0,0,W,H);grain(c,W,H,90,'60,20,5',.12);
+  c.strokeStyle='#120a05';c.lineCap='round';
+  [.13,.87].forEach(u=>{const cx=u*W;c.lineWidth=9;c.beginPath();
+    for(let y=0;y<=H;y+=6)c.lineTo(cx+20*Math.sin(y/22),y);c.stroke();
+    c.lineWidth=7;let k=0;for(let y=44;y<H-20;y+=44,k++){const s=k%2?1:-1;curl(c,cx+s*30,y,17,s);}});
+});
+const fbTex=tex(128,1024,(c,W,H)=>{                       // накладка грифа
+  c.fillStyle='#f0e6cf';c.fillRect(0,0,W,H);c.fillStyle='#111';
+  const A=[0,.11,.30,.47,.62,.75,.86,.965,1];
+  for(let i=0;i<A.length-1;i++){const a=A[i]*H,b=A[i+1]*H,m=(a+b)/2;
+    c.beginPath();c.moveTo(0,a);c.lineTo(0,b);c.lineTo(W*.42,m);c.fill();
+    c.beginPath();c.moveTo(W,a);c.lineTo(W,b);c.lineTo(W*.58,m);c.fill();}
+  c.lineWidth=7;c.strokeStyle='#111';
+  [.11,.47,.75,.965].forEach(y=>{c.beginPath();c.arc(W/2,y*H,17,0,7);c.stroke();});
+  [.30,.62,.86].forEach(y=>{c.beginPath();c.arc(W/2,y*H,6,0,7);c.fill();});
+});
+
+/* ---------- геометрия ---------- */
+function shell(rings,NA=40){const pos=[],uv=[],idx=[];
+  rings.forEach(r=>{for(let j=0;j<=NA;j++){const t=Math.PI*j/NA;pos.push(r.w*Math.cos(t),r.y,-r.h*Math.sin(t));uv.push(j/NA,r.v);}});
+  for(let i=0;i<rings.length-1;i++)for(let j=0;j<NA;j++){const a=i*(NA+1)+j,b=a+1,c=a+NA+1,d=c+1;idx.push(a,c,b,b,c,d);}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.setIndex(idx);g.computeVertexNormals();return g;}
+function front(pts){const g=new THREE.ShapeGeometry(new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0],p[1]))));
+  const p=g.attributes.position,uv=g.attributes.uv;let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(let i=0;i<p.count;i++){x0=Math.min(x0,p.getX(i));x1=Math.max(x1,p.getX(i));y0=Math.min(y0,p.getY(i));y1=Math.max(y1,p.getY(i));}
+  for(let i=0;i<p.count;i++)uv.setXY(i,(p.getX(i)-x0)/(x1-x0),(p.getY(i)-y0)/(y1-y0));return g;}
+
+/* профиль корпуса: груша с острым верхом и круглым низом (s: 0 — сверху, 1 — снизу) */
+const tbl=[[0,.0287],[.07,.047],[.12,.088],[.2,.148],[.3,.192],[.4,.23],[.5,.255],[.6,.266],[.68,.268]];
+const prof=new THREE.CatmullRomCurve3(tbl.map(p=>V(p[0],p[1],0))).getPoints(40).map(v=>[v.x,v.y]);
+for(let a=10;a<=88;a+=6){const r=a*Math.PI/180;prof.push([.68+.32*Math.sin(r),.268*Math.cos(r)]);}
+const rings=prof.map(([s,wf])=>{const w=wf*B;return{y:B*(1-s),w,h:1.03*w+.0106*Math.max(0,1-s/.15),v:1-s};});
+
+const M=(o)=>new THREE.MeshStandardMaterial(o);
+const orange=col('#a9501c');
+const dom=new THREE.Group();
+
+const back=new THREE.Mesh(shell(rings),new THREE.MeshPhysicalMaterial({map:backTex,roughness:.4,clearcoat:.5,clearcoatRoughness:.25,side:THREE.DoubleSide}));
+dom.add(back);
+const outline=rings.map(r=>[r.w,r.y]).concat(rings.slice().reverse().map(r=>[-r.w,r.y]));
+dom.add(new THREE.Mesh(front(outline),M({map:topTex,roughness:.55})));
+
+/* гриф */
+const nr=[];for(let k=0;k<=10;k++){const f=1-k/10;nr.push({y:NUT-k*.049,w:.0125+.003*f,h:.022+.0045*f,v:0});}
+dom.add(new THREE.Mesh(shell(nr,24),M({color:orange,roughness:.45,side:THREE.DoubleSide})));
+dom.add(new THREE.Mesh(front([[.0155,B],[.0125,NUT],[-.0125,NUT],[-.0155,B]]),M({map:fbTex,roughness:.5})));
+
+/* головка с колками */
+const head=new THREE.Group();head.position.set(0,NUT,0);head.rotation.x=-.22;dom.add(head);
+const L=new THREE.SplineCurve([[-.0115,0],[-.0125,.014],[-.0235,.03],[-.0235,.047],[-.013,.062],[0,.079]].map(p=>new THREE.Vector2(p[0],p[1]))).getPoints(30);
+const hp=[...L,...L.slice(0,-1).reverse().map(p=>new THREE.Vector2(-p.x,p.y))];
+const hg=new THREE.ExtrudeGeometry(new THREE.Shape(hp),{depth:.012,bevelEnabled:true,bevelThickness:.0015,bevelSize:.0015,bevelSegments:2,curveSegments:1});
+hg.translate(0,0,-.0135);
+head.add(new THREE.Mesh(hg,M({color:col('#9a4518'),roughness:.45})));
+const dark=M({color:col('#2c160a'),roughness:.5}),tulip=M({color:orange,roughness:.4});
+[[-.007,.028],[.007,.047]].forEach(([x,y])=>{
+  const sh=new THREE.Mesh(new THREE.CylinderGeometry(.0035,.0035,.07,16),dark);sh.rotation.x=Math.PI/2;sh.position.set(x,y,-.03);head.add(sh);
+  const pd=new THREE.Mesh(new THREE.SphereGeometry(.018,20,14),tulip);pd.scale.set(.3,.9,1.15);pd.position.set(x,y,-.078);head.add(pd);});
+
+/* порожек, подставка, струны */
+const cream=M({color:col('#efe3c8'),roughness:.4});
+const nut=new THREE.Mesh(new THREE.BoxGeometry(.026,.004,.006),cream);nut.position.set(0,NUT-.002,.003);dom.add(nut);
+const bridge=new THREE.Mesh(new THREE.BoxGeometry(.05,.007,.012),cream);bridge.position.set(0,.108,.006);dom.add(bridge);
+const btn=new THREE.Mesh(new THREE.SphereGeometry(.009,16,12),dark);btn.position.set(0,-.002,-.004);dom.add(btn);
+const strM=M({color:col('#f4f0e6'),roughness:.4});
+function seg(p,q,r,m,parent){const a=V(...p),b=V(...q),d=b.clone().sub(a);
+  const s=new THREE.Mesh(new THREE.CylinderGeometry(r,r,d.length(),8),m);
+  s.position.copy(a).add(b).multiplyScalar(.5);s.quaternion.setFromUnitVectors(V(0,1,0),d.normalize());parent.add(s);}
+[[-.007,.028],[.007,.047]].forEach(([x,py])=>{
+  seg([x*.4,.002,.003],[x,.108,.0145],.0009,strM,dom);
+  seg([x,.108,.0145],[x,NUT,.006],.0009,strM,dom);
+  seg([x,0,.006],[x,py,.004],.0009,strM,head);});
+
+dom.position.y=-.55;scene_add();
+function scene_add(){}
+</script>
+<script>
+/* ---------- сцена ---------- */
+const canvas=document.getElementById('c'),stage=document.getElementById('stage');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputEncoding=THREE.sRGBEncoding;
+const scene=new THREE.Scene();scene.add(dom);
+scene.add(new THREE.HemisphereLight(0xffffff,0x77695a,.75));
+const k1=new THREE.DirectionalLight(0xffffff,.85);k1.position.set(1.5,2,3);scene.add(k1);
+const k2=new THREE.DirectionalLight(0xffffff,.8);k2.position.set(-1.5,1.5,-3);scene.add(k2);
+const k3=new THREE.DirectionalLight(0xfff0e0,.35);k3.position.set(-3,.5,1);scene.add(k3);
+const cam=new THREE.PerspectiveCamera(35,1,.05,30);
+const ctl=new THREE.OrbitControls(cam,canvas);
+ctl.target.set(0,0,-.04);ctl.enableDamping=true;ctl.minDistance=.4;ctl.maxDistance=5;ctl.autoRotateSpeed=2.5;
+function setPos(az,el,d){cam.position.set(Math.sin(az)*Math.cos(el)*d,Math.sin(el)*d,Math.cos(az)*Math.cos(el)*d).add(ctl.target);}
+setPos(.55,.08,2.5);
+function fit(){const r=stage.getBoundingClientRect();renderer.setSize(r.width,r.height,false);cam.aspect=r.width/r.height;cam.updateProjectionMatrix();}
+new ResizeObserver(fit).observe(stage);addEventListener('resize',fit);fit();
+
+let anim=null;
+const autoBtn=document.getElementById('auto');
+function goView(az1,el1=.08){ctl.autoRotate=false;autoBtn.classList.remove('on');
+  const v=cam.position.clone().sub(ctl.target),d=v.length(),az0=Math.atan2(v.x,v.z),el0=Math.asin(v.y/d);
+  let da=az1-az0;da=Math.atan2(Math.sin(da),Math.cos(da));const t0=performance.now();
+  anim=now=>{const k=Math.min(1,(now-t0)/600),e=k*k*(3-2*k),dd=d+(2.5-d)*e;
+    setPos(az0+da*e,el0+(el1-el0)*e,dd);if(k>=1)anim=null;};}
+document.querySelectorAll('button[data-az]').forEach(b=>b.onclick=()=>goView(+b.dataset.az));
+autoBtn.onclick=()=>{anim=null;ctl.autoRotate=!ctl.autoRotate;autoBtn.classList.toggle('on',ctl.autoRotate);};
+canvas.addEventListener('pointerdown',()=>{anim=null;});
+(function loop(t){requestAnimationFrame(loop);if(anim)anim(t);ctl.update();renderer.render(scene,cam);})(0);
+</script>
+</body>
+</html>
